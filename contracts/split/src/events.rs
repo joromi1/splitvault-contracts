@@ -343,6 +343,16 @@ pub fn delegate_revoked(env: &Env, invoice_id: u64, revoker: &Address) {
     );
 }
 
+/// Emitted when a beneficiary revokes a pay delegate.
+/// Topics: (split, pd_revoke, beneficiary)
+/// Data: (delegate, ledger_sequence)
+pub fn pay_delegate_revoked(env: &Env, beneficiary: &Address, delegate: &Address) {
+    env.events().publish(
+        (symbol_short!("split"), symbol_short!("pd_revoke"), beneficiary.clone()),
+        (delegate.clone(), env.ledger().sequence()),
+    );
+}
+
 /// Emitted when an invoice is partially released.
 /// Topics: (split, part_rel, invoice_id)
 /// Data: (recipients, event_seq)
