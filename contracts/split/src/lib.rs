@@ -185,6 +185,18 @@ fn creator_fee_waiver_key() -> Symbol {
     symbol_short!("cr_fw")
 }
 
+/// Issue #124: per-creator fee waiver flag — O(1) lookup without loading the full list.
+fn creator_fee_waiver_flag_key(creator: &Address) -> (Symbol, Address) {
+    (symbol_short!("waiver"), creator.clone())
+}
+
+fn creator_has_fee_waiver(env: &Env, creator: &Address) -> bool {
+    env.storage()
+        .persistent()
+        .get(&creator_fee_waiver_flag_key(creator))
+        .unwrap_or(false)
+}
+
 /// Issue #297: Circuit breaker active flag key.
 fn circuit_breaker_key() -> Symbol {
     symbol_short!("cb_flag")
@@ -825,6 +837,17 @@ fn timelock_action_key(action_id: u64) -> (Symbol, u64) {
 
 fn pay_shard_key(invoice_id: u64, shard_id: u64) -> (Symbol, u64, u64) {
     (symbol_short!("pay_sh"), invoice_id, shard_id)
+}
+
+/// Load a single payment shard, checking persistent storage then the archived
+/// (instance) copy.
+fn load_payment_shard(env: &Env, invoice_id: u64, shard_id: u64) -> Vec<Payment> {
+    let shard_key = pay_shard_key(invoice_id, shard_id);
+    env.storage()
+        .persistent()
+        .get::<(Symbol, u64, u64), Vec<Payment>>(&shard_key)
+        .or_else(|| env.storage().instance().get(&shard_key))
+        .unwrap_or_else(|| Vec::new(env))
 }
 
 fn compute_shard_id(env: &Env, payer: &Address) -> u64 {
@@ -10129,14 +10152,7 @@ impl SplitContract {
 
         let funding_token_client = token::Client::new(env, &funding_token_for(invoice));
 
-        let creator_waived: bool = {
-            let cfw: Vec<Address> = env
-                .storage()
-                .persistent()
-                .get(&creator_fee_waiver_key())
-                .unwrap_or_else(|| Vec::new(env));
-            cfw.iter().any(|a| a == invoice.creator)
-        };
+        let creator_waived: bool = creator_has_fee_waiver(env, &invoice.creator);
 
         let total: i128 = invoice.amounts.iter().sum();
         let funded = invoice.funded;
@@ -10741,14 +10757,7 @@ impl SplitContract {
         let funding_token_client = token::Client::new(env, &funding_token_for(invoice));
 
         // Issue #296: if creator has a fee waiver, platform_fee_bps is 0 for this invoice.
-        let creator_waived: bool = {
-            let cfw: Vec<Address> = env
-                .storage()
-                .persistent()
-                .get(&creator_fee_waiver_key())
-                .unwrap_or_else(|| Vec::new(env));
-            cfw.iter().any(|a| a == invoice.creator)
-        };
+        let creator_waived: bool = creator_has_fee_waiver(env, &invoice.creator);
 
         let funded = invoice.funded;
 
@@ -13205,13 +13214,18 @@ impl SplitContract {
             "invoice is not pending"
         );
 
-        let has_paid = invoice.payments.iter().any(|p| p.payer == voter);
+        // Issue #112: payments live in sharded storage, so eligibility and the
+        // unique payer set are derived from the payment shards directly.
+        let voter_shard = load_payment_shard(&env, invoice_id, compute_shard_id(&env, &voter));
+        let has_paid = voter_shard.iter().any(|p| p.payer == voter);
         assert!(has_paid, "only payers can vote");
 
         let mut unique_payers: Vec<Address> = Vec::new(&env);
-        for payment in invoice.payments.iter() {
-            if !unique_payers.contains(&payment.payer) {
-                unique_payers.push_back(payment.payer);
+        for shard_id in 0..SHARD_COUNT {
+            for payment in load_payment_shard(&env, invoice_id, shard_id).iter() {
+                if !unique_payers.contains(&payment.payer) {
+                    unique_payers.push_back(payment.payer);
+                }
             }
         }
 
@@ -14629,6 +14643,9 @@ impl SplitContract {
             env.storage()
                 .persistent()
                 .set(&creator_fee_waiver_key(), &waivers);
+            env.storage()
+                .persistent()
+                .set(&creator_fee_waiver_flag_key(&creator), &true);
             events::fee_waiver_granted(&env, &creator);
         }
     }
@@ -14642,25 +14659,31 @@ impl SplitContract {
             .get(&creator_fee_waiver_key())
             .unwrap_or_else(|| Vec::new(&env));
         let mut new_waivers: Vec<Address> = Vec::new(&env);
+        let mut found = false;
         for a in waivers.iter() {
-            if a != creator {
+            if a == creator {
+                found = true;
+            } else {
                 new_waivers.push_back(a);
             }
+        }
+        // Issue #123: only revoke (and emit) when the creator actually held a waiver.
+        if !found {
+            return;
         }
         env.storage()
             .persistent()
             .set(&creator_fee_waiver_key(), &new_waivers);
+        env.storage()
+            .persistent()
+            .remove(&creator_fee_waiver_flag_key(&creator));
         events::fee_waiver_revoked(&env, &creator);
     }
 
     /// Returns true if the creator is on the fee waiver list.
+    /// Issue #124: O(1) keyed lookup instead of scanning the full waiver vector.
     pub fn has_fee_waiver(env: Env, creator: Address) -> bool {
-        let waivers: Vec<Address> = env
-            .storage()
-            .persistent()
-            .get(&creator_fee_waiver_key())
-            .unwrap_or_else(|| Vec::new(&env));
-        waivers.iter().any(|a| a == creator)
+        creator_has_fee_waiver(&env, &creator)
     }
 
     // -----------------------------------------------------------------------
@@ -16006,17 +16029,18 @@ impl SplitContract {
             env.ledger().sequence() >= delayed_payout.claimable_at_ledger,
             "payout not yet claimable"
         );
-        let invoice = load_invoice(&env, invoice_id);
-        let token = funding_token_for(&invoice);
-        let token_client = token::Client::new(&env, &token);
+        // Issue #111: clear the record before the external transfer (CEI) so a
+        // re-entrant claim finds no payout.
+        env.storage()
+            .persistent()
+            .remove(&delayed_payout_key(invoice_id, &recipient));
+        // Disburse the asset the payout was denominated in.
+        let token_client = token::Client::new(&env, &delayed_payout.token);
         token_client.transfer(
             &env.current_contract_address(),
             &recipient,
             &delayed_payout.amount,
         );
-        env.storage()
-            .persistent()
-            .remove(&delayed_payout_key(invoice_id, &recipient));
         events::delayed_payout_claimed(&env, invoice_id, &recipient, delayed_payout.amount);
     }
 

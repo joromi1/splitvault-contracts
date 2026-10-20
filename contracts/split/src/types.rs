@@ -1856,6 +1856,8 @@ pub struct TemplateCounter {
 pub struct DelayedPayout {
     /// Amount to be transferred to recipient.
     pub amount: i128,
+    /// Token the payout is denominated in (issue #111).
+    pub token: Address,
     /// Ledger sequence at which this payout becomes claimable.
     pub claimable_at_ledger: u32,
 }
