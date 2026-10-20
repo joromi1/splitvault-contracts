@@ -19,6 +19,9 @@ const MAX_CO_CREATORS: usize = 10;
 
 /// Default dispute timeout in ledgers (30 days at ~5 s/ledger).
 const DEFAULT_DISPUTE_TIMEOUT_LEDGERS: u32 = 518_400;
+/// Default expiry window (in ledgers) for payer-raised disputes when no
+/// dispute timeout has been configured.
+const DEFAULT_PAYER_DISPUTE_EXPIRY_LEDGERS: u32 = 72;
 
 /// Default payer spend cap window in ledgers (~1 day at ~5 s/ledger).
 const DEFAULT_PAYER_SPEND_WINDOW_LEDGERS: u32 = 17_280;
@@ -829,6 +832,42 @@ fn compute_shard_id(env: &Env, payer: &Address) -> u64 {
     let len = bytes.len();
     let last = bytes.get(len - 1).unwrap_or(0) as u64;
     last % SHARD_COUNT
+}
+
+/// Whether `payer` has a payment recorded for the invoice, checking the
+/// payer's payment shard as well as the legacy inline `payments` vector.
+fn has_paid_invoice(env: &Env, invoice_id: u64, invoice: &Invoice, payer: &Address) -> bool {
+    let shard_id = compute_shard_id(env, payer);
+    let in_shard = env
+        .storage()
+        .persistent()
+        .get::<(Symbol, u64, u64), Vec<Payment>>(&pay_shard_key(invoice_id, shard_id))
+        .map(|payments| payments.iter().any(|p| p.payer == *payer))
+        .unwrap_or(false);
+    in_shard || invoice.payments.iter().any(|p| p.payer == *payer)
+}
+
+/// Aggregate per-payer contribution totals for an invoice across every
+/// payment shard plus the legacy inline `payments` vector.
+fn collect_payer_totals(env: &Env, invoice_id: u64, invoice: &Invoice) -> Map<Address, i128> {
+    let mut totals: Map<Address, i128> = Map::new(env);
+    for shard_id in 0..SHARD_COUNT {
+        if let Some(payments) = env
+            .storage()
+            .persistent()
+            .get::<(Symbol, u64, u64), Vec<Payment>>(&pay_shard_key(invoice_id, shard_id))
+        {
+            for payment in payments.iter() {
+                let prev = totals.get(payment.payer.clone()).unwrap_or(0);
+                totals.set(payment.payer.clone(), prev + payment.amount);
+            }
+        }
+    }
+    for payment in invoice.payments.iter() {
+        let prev = totals.get(payment.payer.clone()).unwrap_or(0);
+        totals.set(payment.payer.clone(), prev + payment.amount);
+    }
+    totals
 }
 
 fn require_admin(env: &Env) -> Address {
@@ -14076,6 +14115,42 @@ impl SplitContract {
             .and_then(|m| m.get(delegate))
     }
 
+    /// Revoke a delegate previously authorised via `authorise_delegate`.
+    /// Requires beneficiary auth. The revoked delegate immediately loses the
+    /// ability to call `delegate_pay` on behalf of the beneficiary.
+    /// Panics with "delegate not authorised" if the delegate is not present.
+    pub fn revoke_pay_delegate(env: Env, beneficiary: Address, delegate: Address) {
+        require_not_paused(&env);
+        beneficiary.require_auth();
+
+        let key = delegate_pay_key(&beneficiary);
+        let mut delegates: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(&env));
+        let idx = delegates
+            .first_index_of(&delegate)
+            .expect("delegate not authorised");
+
+        delegates.remove(idx);
+        if delegates.is_empty() {
+            env.storage().persistent().remove(&key);
+        } else {
+            env.storage().persistent().set(&key, &delegates);
+        }
+
+        events::pay_delegate_revoked(&env, &beneficiary, &delegate);
+    }
+
+    /// Return the delegates currently authorised to pay on behalf of `beneficiary`.
+    pub fn get_pay_delegates(env: Env, beneficiary: Address) -> Vec<Address> {
+        env.storage()
+            .persistent()
+            .get(&delegate_pay_key(&beneficiary))
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
     /// Pay toward an invoice using an authorised delegate.
     ///
     /// The delegate supplies the funds, so the payment is recorded with the
@@ -15008,8 +15083,8 @@ impl SplitContract {
         );
         assert!(!invoice.disputed, "invoice is already disputed");
 
-        // Verify caller is a payer.
-        let is_payer = invoice.payments.iter().any(|p| p.payer == payer);
+        // Verify caller is a payer (payments live in sharded storage).
+        let is_payer = has_paid_invoice(&env, invoice_id, &invoice, &payer);
         assert!(is_payer, "caller has not paid this invoice");
 
         // 48-ledger window from full funding (use funded_at ledger if stored, else current).
@@ -15026,12 +15101,19 @@ impl SplitContract {
         invoice.disputed = true;
         save_invoice(&env, invoice_id, &invoice);
 
+        // Snapshot the configured dispute timeout so later configuration
+        // changes do not alter the window of an already-open dispute.
+        let timeout_ledgers: u32 = env
+            .storage()
+            .instance()
+            .get(&dispute_timeout_key())
+            .unwrap_or(DEFAULT_PAYER_DISPUTE_EXPIRY_LEDGERS);
         let record = DisputeRecord {
             reason_hash: reason_hash.clone(),
             raised_at: env.ledger().sequence(),
             status: DisputeStatus::Active,
             dispute_opened_ledger: env.ledger().sequence(),
-            dispute_timeout_ledgers: 0,
+            dispute_timeout_ledgers: timeout_ledgers,
         };
         env.storage()
             .persistent()
@@ -15086,11 +15168,7 @@ impl SplitContract {
 
                 let token_client =
                     token::Client::new(&env, &funding_token_for(&invoice));
-                let mut totals: Map<Address, i128> = Map::new(&env);
-                for payment in invoice.payments.iter() {
-                    let prev = totals.get(payment.payer.clone()).unwrap_or(0);
-                    totals.set(payment.payer.clone(), prev + payment.amount);
-                }
+                let totals = collect_payer_totals(&env, invoice_id, &invoice);
                 let mut total_refunded_amount: i128 = 0;
                 for (payer, amount) in totals.iter() {
                     token_client.transfer(&env.current_contract_address(), &payer, &amount);
@@ -15132,13 +15210,11 @@ impl SplitContract {
 
                 let token_client =
                     token::Client::new(&env, &funding_token_for(&invoice));
-                let mut totals: Map<Address, i128> = Map::new(&env);
-                for payment in invoice.payments.iter() {
-                    let prev = totals.get(payment.payer.clone()).unwrap_or(0);
-                    totals.set(payment.payer.clone(), prev + payment.amount);
-                }
+                let totals = collect_payer_totals(&env, invoice_id, &invoice);
+                let mut total_refunded_amount: i128 = 0;
                 for (payer, amount) in totals.iter() {
                     token_client.transfer(&env.current_contract_address(), &payer, &amount);
+                    total_refunded_amount += amount;
                     events::payer_refunded(&env, invoice_id, &payer, amount);
                 }
 
@@ -15147,7 +15223,7 @@ impl SplitContract {
                 invoice.completion_time = Some(env.ledger().timestamp());
                 save_invoice(&env, invoice_id, &invoice);
                 events::dispute_resolved(&env, invoice_id, &admin_addr, &DisputeOutcome::Refund);
-                events::invoice_refunded(&env, invoice_id, invoice.funded);
+                events::invoice_refunded(&env, invoice_id, total_refunded_amount);
                 events::invoice_state_changed(
                     &env,
                     invoice_id,
@@ -15160,7 +15236,8 @@ impl SplitContract {
         }
     }
 
-    /// Check and auto-expire a dispute if 72 ledgers have elapsed without resolution.
+    /// Check and auto-expire a dispute once its configured timeout (default 72
+    /// ledgers) has elapsed without resolution.
     /// If expired, funds are released to recipients.
     pub fn expire_dispute(env: Env, invoice_id: u64) {
         require_not_paused(&env);
@@ -15177,9 +15254,14 @@ impl SplitContract {
             record.status == DisputeStatus::Active,
             "dispute is not active"
         );
+        let timeout_ledgers = if record.dispute_timeout_ledgers > 0 {
+            record.dispute_timeout_ledgers
+        } else {
+            DEFAULT_PAYER_DISPUTE_EXPIRY_LEDGERS
+        };
         assert!(
-            env.ledger().sequence() > record.raised_at + 72,
-            "dispute expiry window not reached (72 ledgers)"
+            env.ledger().sequence() > record.raised_at.saturating_add(timeout_ledgers),
+            "dispute expiry window not reached"
         );
 
         let mut updated = record.clone();
