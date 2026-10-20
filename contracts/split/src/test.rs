@@ -4027,7 +4027,7 @@ fn test_authorise_delegate_and_delegate_pay_records_delegate_as_payer() {
     env.ledger().set_timestamp(1_000);
 
     let id = make_invoice(&env, &c, &creator, &recipient, 100, &token_id, 9_999);
-    c.authorise_delegate(&beneficiary, &delegate);
+    c.authorise_delegate(&beneficiary, &delegate, &100_i128, &5_000_u64);
     c.delegate_pay(&delegate, &beneficiary, &id, &100_i128);
 
     let invoice = c.get_invoice(&id);
