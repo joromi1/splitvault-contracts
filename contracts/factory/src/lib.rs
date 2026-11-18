@@ -91,7 +91,7 @@ impl SplitFactory {
     /// Add a WASM hash to the approved deployment allowlist.
     ///
     /// Only the factory admin may call this. Subsequent calls to
-    /// [`Self::deploy_invoice_contract`] will only succeed when the supplied
+    /// [`SplitFactory::deploy_invoice_contract`] will only succeed when the supplied
     /// `wasm_hash` appears in the allowlist.
     ///
     /// # Parameters
@@ -312,7 +312,7 @@ impl SplitFactory {
     ///
     /// Because the deployed address is deterministic per `(creator, salt)`,
     /// the factory rejects duplicate salts for the same creator. Use this
-    /// view function before calling [`Self::deploy_invoice_contract`] to
+    /// view function before calling [`SplitFactory::deploy_invoice_contract`] to
     /// pre-check whether a salt is available.
     ///
     /// # Parameters

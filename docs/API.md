@@ -721,8 +721,6 @@ Creates a subscription invoice. The subscription params are stored and can be us
 
 See the [Payment](#payment) section for `pay_confidential`, `reveal_confidential_total`, and `get_confidential_payment_count`.
 
-See [`docs/ISSUE_295_CONFIDENTIAL_PAYMENTS.md`](./ISSUE_295_CONFIDENTIAL_PAYMENTS.md) for full design notes.
-
 ---
 
 ## Timelock

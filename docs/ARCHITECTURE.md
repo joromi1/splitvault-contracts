@@ -165,7 +165,7 @@ All events use a three-part topic: `(namespace, event_name, entity_id)`.
 - Namespace is always `symbol_short!("split")`
 - Entity ID is the `invoice_id` for invoice events, or omitted for contract-level events
 
-See [`docs/EVENTS.md`](./EVENTS.md) for the complete event reference.
+See the [event definitions](../contracts/split/src/events.rs) for event names, topics, and payloads.
 
 ---
 

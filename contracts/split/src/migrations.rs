@@ -16,9 +16,8 @@
 //! Only a contract whose Wasm was upgraded out from under existing data
 //! (leaving `schema_version` at a stale value) needs `migrate`.
 //!
-//! Migrations are chunked: each `migrate` call processes at most
-//! [`DEFAULT_MIGRATION_BATCH_SIZE`] invoice ids (or a caller-supplied
-//! `batch_size`) and persists a per-target-version cursor so consecutive
+//! Each `migrate` call processes at most [`DEFAULT_MIGRATION_BATCH_SIZE`] invoice
+//! ids per migration step. The cursor for each target version lets consecutive
 //! transactions resume where the previous one left off. This keeps a single
 //! transaction within Soroban's instruction budget even for contracts with
 //! thousands of invoices.
@@ -30,8 +29,7 @@ use soroban_sdk::contracttype;
 /// new `migration_vN` and wire it into [`run_pending_migrations`].
 pub const CURRENT_SCHEMA_VERSION: u32 = 3;
 
-/// Default number of invoice ids processed per `migrate` invocation when the
-/// caller does not supply an explicit `batch_size`.
+/// Maximum number of invoice ids processed per migration step and invocation.
 pub const DEFAULT_MIGRATION_BATCH_SIZE: u32 = 50;
 
 /// Instance storage: current on-chain schema version.
@@ -198,9 +196,58 @@ pub fn get_invoice_meta(env: &Env, id: u64) -> Option<InvoiceMeta> {
     env.storage().persistent().get(&invoice_meta_key_v3(id))
 }
 
-/// Run pending migrations in bounded chunks of `batch_size` invoice ids per
-/// call. Each step advances the stored schema version only once its chunked
+/// Run pending migrations in chunks of [`DEFAULT_MIGRATION_BATCH_SIZE`] invoices.
+/// Each step advances the stored schema version only once its chunked
 /// loop has fully completed, and persists a per-target-version cursor so a
 /// subsequent `migrate` call resumes where the previous transaction left off.
 /// Returns the resulting schema version (which may still be below
-/// [`CURRENT_SCHEMA_VERSION`] if more chunks remain)
+/// [`CURRENT_SCHEMA_VERSION`] if more chunks remain).
+pub fn run_pending_migrations(env: &Env) -> u32 {
+    let batch_size = DEFAULT_MIGRATION_BATCH_SIZE;
+    let mut version = schema_version(env);
+    if version < 2 {
+        if migration_v2(env, batch_size) {
+            version = 2;
+            set_schema_version(env, version);
+        } else {
+            return version;
+        }
+    }
+    if version < 3 {
+        if migration_v3(env, batch_size) {
+            version = 3;
+            set_schema_version(env, version);
+        } else {
+            return version;
+        }
+    }
+    // Issue #36: Pedersen generators are pinned in instance storage during
+    // `initialize()`, but contracts that are upgraded via Soroban WASM upgrade
+    // never re-execute `initialize()`.  Lazily backfill the generators here so
+    // that confidential payment features work correctly on upgraded contracts.
+    ensure_pedersen_generators(env);
+    version
+}
+
+/// Backfill Pedersen commitment generators if they are absent from instance
+/// storage.  Safe to call on freshly-initialized contracts because the
+/// early-return means we never overwrite an already-established basis.
+pub fn ensure_pedersen_generators(env: &Env) {
+    if env.storage().instance().has(&pedersen_g_key())
+        && env.storage().instance().has(&pedersen_h_key())
+    {
+        return;
+    }
+    let dst = soroban_sdk::Bytes::from_slice(env, b"SplitVault-Pedersen-BLS12381G1-v1");
+    let bls = env.crypto().bls12_381();
+    let g = bls.hash_to_g1(
+        &soroban_sdk::Bytes::from_slice(env, b"pedersen-generator-G"),
+        &dst,
+    );
+    let h = bls.hash_to_g1(
+        &soroban_sdk::Bytes::from_slice(env, b"pedersen-generator-H"),
+        &dst,
+    );
+    env.storage().instance().set(&pedersen_g_key(), &g);
+    env.storage().instance().set(&pedersen_h_key(), &h);
+}

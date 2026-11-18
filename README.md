@@ -3,7 +3,7 @@
   <h1>split-contracts</h1>
 </div>
 
-![Rust](https://img.shields.io/badge/Rust-1.84+-orange?logo=rust)
+![Rust](https://img.shields.io/badge/Rust-1.100.0-orange?logo=rust)
 ![Soroban SDK](https://img.shields.io/badge/soroban--sdk-28-blueviolet)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![CI](https://github.com/splitvault/split-contracts/actions/workflows/test.yml/badge.svg)
@@ -20,7 +20,7 @@ SplitVault lets users create on-chain invoices where multiple payers each owe a 
 
 | Layer | Technology |
 |-------|-----------|
-| Language | Rust 1.84+ |
+| Language | Rust 1.100.0 |
 | Smart Contract SDK | soroban-sdk 28 |
 | Test Runner | `cargo test` |
 | Deploy Tool | stellar-cli |
@@ -30,18 +30,15 @@ SplitVault lets users create on-chain invoices where multiple payers each owe a 
 
 ### Prerequisites
 
-- Rust 1.84+ with `wasm32-unknown-unknown` target
-- stellar-cli
+- Rust installed through rustup, which reads the Rust version and `wasm32v1-none` target from `rust-toolchain.toml`
+- Stellar CLI 25.2.0 or newer
 
 ```bash
 # Install Rust
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
-# Add WASM target
-rustup target add wasm32-unknown-unknown
-
 # Install stellar-cli
-cargo install --locked stellar-cli --features opt
+cargo install --locked stellar-cli --version 30.0.1
 ```
 
 ### Clone & Build
@@ -49,13 +46,13 @@ cargo install --locked stellar-cli --features opt
 ```bash
 git clone https://github.com/splitvault/split-contracts.git
 cd split-contracts
-cargo build --target wasm32-unknown-unknown --release
+stellar contract build --locked
 ```
 
 ### Run Tests
 
 ```bash
-cargo test --workspace
+cargo test --locked --workspace
 ```
 
 ## Contract Function Reference

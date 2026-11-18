@@ -4053,7 +4053,7 @@ fn test_114_delegate_pay_refund_returns_to_delegate() {
     env.ledger().set_timestamp(1_000);
 
     let id = make_invoice(&env, &c, &creator, &recipient, 100, &token_id, 2_000);
-    c.authorise_delegate(&beneficiary, &delegate);
+    c.authorise_delegate(&beneficiary, &delegate, &100_i128, &5_000_u64);
     c.delegate_pay(&delegate, &beneficiary, &id, &40_i128);
     assert_eq!(tk.balance(&delegate), 160);
 
@@ -5686,7 +5686,7 @@ fn test_121_simulate_release_rejects_released_invoice() {
     env.ledger().set_timestamp(1_000);
 
     let id = make_invoice(&env, &c, &creator, &recipient, 100, &token_id, 9_999);
-    c.pay(&payer, &id, &100);
+    c.pay(&payer, &id, &100, &0, &false, &false, &None);
     assert_eq!(
         c.try_simulate_release(&id).unwrap_err(),
         Ok(ContractError::InvalidStatus.into())
@@ -9101,7 +9101,17 @@ fn test_withdraw_contribution_no_double_refund() {
     env.ledger().set_timestamp(1_000);
 
     // Invoice requires 500 tokens, deadline is 9_999.
-    let id = make_invoice(&env, &c, &creator, &recipient, 500, &token_id, 9_999);
+    let id = c.create_invoice(
+        &creator,
+        &soroban_sdk::vec![&env, recipient],
+        &soroban_sdk::vec![&env, 500_i128],
+        &token_id,
+        &9_999,
+        &InvoiceOptions {
+            allow_early_withdrawal: true,
+            ..default_options(&env)
+        },
+    );
 
     // Payer contributes 300.
     c.pay(&payer, &id, &300_i128, &0_u64, &false, &false, &None);
@@ -9131,27 +9141,27 @@ fn test_withdraw_contribution_no_double_refund() {
 // Issue #120: certificate hash commits to recipients, tokens and contract
 // ---------------------------------------------------------------------------
 
-fn issue_cert_hash_for_fresh_invoice() -> (u64, [u8; 32]) {
+fn issue_cert_hash_for_fresh_invoice(recipient_index: usize) -> (u64, [u8; 32]) {
     let (env, contract_id, token_id) = setup_initialized();
     let c = client(&env, &contract_id);
     let creator = Address::generate(&env);
-    let recipient = Address::generate(&env);
+    let recipients = [Address::generate(&env), Address::generate(&env)];
+    let recipient = &recipients[recipient_index];
     let payer = Address::generate(&env);
     StellarAssetClient::new(&env, &token_id).mint(&payer, &100);
     env.ledger().set_timestamp(1_000);
 
-    let id = make_invoice(&env, &c, &creator, &recipient, 100, &token_id, 9_999);
-    c.pay(&payer, &id, &100);
+    let id = make_invoice(&env, &c, &creator, recipient, 100, &token_id, 9_999);
+    c.pay(&payer, &id, &100, &0, &false, &false, &None);
     let cert = c.issue_certificate(&id);
     (id, cert.cert_hash.to_array())
 }
 
 #[test]
 fn test_120_certificate_hash_differs_by_recipient() {
-    // Identical invoice id, total and release timestamp; different
-    // recipients, tokens and contract instance.
-    let (id_a, hash_a) = issue_cert_hash_for_fresh_invoice();
-    let (id_b, hash_b) = issue_cert_hash_for_fresh_invoice();
+    // Keep the invoice ID, token, and timing identical while changing the recipient.
+    let (id_a, hash_a) = issue_cert_hash_for_fresh_invoice(0);
+    let (id_b, hash_b) = issue_cert_hash_for_fresh_invoice(1);
     assert_eq!(id_a, id_b);
     assert_ne!(hash_a, hash_b);
 }

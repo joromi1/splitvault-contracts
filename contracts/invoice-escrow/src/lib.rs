@@ -23,7 +23,7 @@ mod types;
 #[cfg(test)]
 mod test;
 
-use errors::Error;
+pub use errors::Error;
 use soroban_sdk::{
     contract, contractimpl, symbol_short, token, Address, BytesN, Env, Symbol, Vec,
 };
@@ -259,7 +259,7 @@ impl InvoiceEscrowContract {
     ///
     /// The current admin authenticates and records `new_admin` as the pending
     /// replacement. No authority is transferred yet — the `new_admin` must call
-    /// [`Self::accept_admin`] to complete the handover.
+    /// [`InvoiceEscrowContract::accept_admin`] to complete the handover.
     ///
     /// Calling `transfer_admin` a second time with a different address replaces
     /// any existing pending proposal (useful to correct a typo without having
@@ -286,7 +286,7 @@ impl InvoiceEscrowContract {
 
     /// **Step 2 of 2**: Accept the pending admin proposal.
     ///
-    /// The `new_admin` address that was proposed via [`Self::transfer_admin`]
+    /// The `new_admin` address that was proposed via [`InvoiceEscrowContract::transfer_admin`]
     /// authenticates here, completing the handover. The pending proposal is
     /// cleared and the caller becomes the new admin.
     ///
@@ -643,7 +643,7 @@ impl InvoiceEscrowContract {
     /// Cancel an invoice. Only the admin may cancel.
     ///
     /// Transitions the invoice to `Cancelled`. If funds are held they must be
-    /// refunded separately via [`Self::refund`] (or admin-driven recovery) since
+    /// refunded separately via [`InvoiceEscrowContract::refund`] (or admin-driven recovery) since
     /// this call does not transfer tokens, avoiding unbounded iteration over
     /// unknown payers.
     ///
@@ -677,7 +677,7 @@ impl InvoiceEscrowContract {
     ///
     /// Only the contract admin can blacklist a payer. The blacklist entry
     /// starts with `finalised: false`, giving the payer a window to submit
-    /// an appeal via [`Self::submit_appeal`].
+    /// an appeal via [`InvoiceEscrowContract::submit_appeal`].
     ///
     /// # Arguments
     /// * `admin` — Contract admin address (must authenticate).
@@ -853,7 +853,7 @@ impl InvoiceEscrowContract {
         Ok(())
     }
 
-    /// Pay an invoice — delegates to [`Self::deposit`] which checks the
+    /// Pay an invoice — delegates to [`InvoiceEscrowContract::deposit`] which checks the
     /// payer blacklist before processing.
     ///
     /// If the payer is blacklisted (`finalised` and `upheld`), the
@@ -867,7 +867,7 @@ impl InvoiceEscrowContract {
     /// # Errors
     /// * [`Error::PayerBlacklisted`] — Payer is on the blacklist and
     ///   the entry is finalised with `upheld: true`.
-    /// * See [`Self::deposit`] for all other errors.
+    /// * See [`InvoiceEscrowContract::deposit`] for all other errors.
     pub fn pay_invoice(
         env: Env,
         payer: Address,

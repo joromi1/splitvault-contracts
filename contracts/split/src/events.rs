@@ -726,7 +726,7 @@ pub fn creator_stats_updated(
 ///
 /// # Indexer Guide
 /// Indexers can reconstruct the full invoice lifecycle by filtering events with
-/// topic[1] == "st_chg". Each event carries:
+/// `topic[1]` == "st_chg". Each event carries:
 ///   - `from`: the previous status (as a Symbol: "none", "pending", "released", "refunded", "cancelled")
 ///   - `to`: the new status (same encoding)
 ///   - `actor`: the address that triggered the transition
@@ -913,7 +913,7 @@ pub fn recipient_paid(env: &Env, invoice_id: u64, recipient: &Address, amount: i
 ///
 /// # Indexer Guide
 /// Indexers can subscribe to milestone crossings by filtering events with
-/// topic[1] == "milestone" (optionally narrowed further by topic[2] == invoice_id). Each
+/// `topic[1]` == "milestone" (optionally narrowed further by `topic[2]` == invoice_id). Each
 /// event carries:
 ///   - `milestone_bps`: the crossed threshold in basis points relative to the invoice total —
 ///     2500 = 25%, 5000 = 50%, 7500 = 75%, 10000 = 100%.
@@ -945,12 +945,12 @@ pub fn milestone_reached(env: &Env, invoice_id: u64, milestone_bps: u32, funded_
 /// crosses several configured thresholds at once.
 ///
 /// # Indexer Guide
-/// Filter events with topic[1] == "fnd_chk" (topic[2] is the `invoice_id`, so narrow to a
+/// Filter events with `topic[1]` == "fnd_chk" (`topic[2]` is the `invoice_id`, so narrow to a
 /// single invoice by matching that topic too). Unlike `milestone_reached`, whose thresholds
 /// are the fixed 25/50/75/100% set, `funding_checkpoint` thresholds are admin-configurable,
 /// so `threshold_bps` must always be read from the event data rather than assumed. The
 /// event's `FundingCheckpoint` payload carries:
-///   - `invoice_id`: redundant with topic[2], included in the data for convenience so the
+///   - `invoice_id`: redundant with `topic[2]`, included in the data for convenience so the
 ///     event can be decoded without also decoding topics.
 ///   - `threshold_bps`: the configured checkpoint that was crossed, in basis points of the
 ///     invoice total (`10_000 = 100%`).

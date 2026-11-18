@@ -204,6 +204,11 @@ impl Registry {
         }
 
         env.storage().persistent().set(&contracts_key, &remaining);
+        let count_key = creator_contract_count_key(&creator);
+        env.storage().persistent().set(&count_key, &remaining.len());
+        env.storage()
+            .persistent()
+            .extend_ttl(&count_key, REGISTRY_MIN_TTL, REGISTRY_MAX_TTL);
         env.storage()
             .persistent()
             .extend_ttl(&contracts_key, REGISTRY_MIN_TTL, REGISTRY_MAX_TTL);
@@ -251,6 +256,11 @@ impl Registry {
         }
 
         env.storage().persistent().set(&contracts_key, &remaining);
+        let count_key = creator_contract_count_key(&creator);
+        env.storage().persistent().set(&count_key, &remaining.len());
+        env.storage()
+            .persistent()
+            .extend_ttl(&count_key, REGISTRY_MIN_TTL, REGISTRY_MAX_TTL);
         env.storage()
             .persistent()
             .extend_ttl(&contracts_key, REGISTRY_MIN_TTL, REGISTRY_MAX_TTL);
@@ -270,7 +280,7 @@ impl Registry {
     /// # Panics
     /// * `"registry paused"` — the registry is currently paused.
     /// * `"registry limit exceeded"` — the creator already has
-    ///   [`MAX_CONTRACTS_PER_CREATOR`] registered contracts.
+    ///   `MAX_CONTRACTS_PER_CREATOR` registered contracts.
     /// * `"already registered"` — this contract address is already
     ///   in the creator's list.
     pub fn register(env: Env, creator: Address, contract: Address) {
@@ -293,8 +303,8 @@ impl Registry {
             "already registered"
         );
 
-        // Enforce per-creator limit using the tracked count.
-        let count: u32 = env
+        // Enforce the per-creator limit before appending.
+        let mut contracts: Vec<Address> = env
             .storage()
             .persistent()
             .get(&contracts_key)
@@ -312,15 +322,8 @@ impl Registry {
             .persistent()
             .extend_ttl(&contracts_key, REGISTRY_MIN_TTL, REGISTRY_MAX_TTL);
 
-        // Increment the dedicated O(1) counter (#105).
-        let count: u32 = env
-            .storage()
-            .persistent()
-            .get(&count_key)
-            .unwrap_or(0);
-        env.storage()
-            .persistent()
-            .set(&count_key, &(count + 1));
+        // Update the dedicated O(1) counter (#105).
+        env.storage().persistent().set(&count_key, &contracts.len());
         env.storage()
             .persistent()
             .extend_ttl(&count_key, REGISTRY_MIN_TTL, REGISTRY_MAX_TTL);
@@ -340,22 +343,19 @@ impl Registry {
 
     /// Return the list of contracts registered under `creator`.
     pub fn get_contracts(env: Env, creator: Address) -> Vec<Address> {
-        let count_key = creator_count_key(&creator);
-        let count: u32 = env
+        let key = creator_contracts_key(&creator);
+        let contracts: Vec<Address> = env
             .storage()
             .persistent()
-            .get(&count_key)
-            .unwrap_or(0);
-
-        let mut contracts: Vec<Address> = Vec::new(&env);
-        for index in 0..count {
-            let key = creator_contract_key(&creator, index);
-            if let Some(addr) = env.storage().persistent().get::<_, Address>(&key) {
-                contracts.push_back(addr);
-            }
-        }
-
+            .get(&key)
+            .unwrap_or_else(|| Vec::new(&env));
         // Bump TTL on every read so active registries never expire (#48).
+        if env.storage().persistent().has(&key) {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, REGISTRY_MIN_TTL, REGISTRY_MAX_TTL);
+        }
+        let count_key = creator_contract_count_key(&creator);
         if env.storage().persistent().has(&count_key) {
             env.storage()
                 .persistent()
@@ -366,13 +366,12 @@ impl Registry {
 
     /// Return the number of registered contracts for a creator.
     ///
-    /// Reads the dedicated counter key in O(1) instead of deserializing the
-    /// full address vector (#105).
+    /// Reads the dedicated counter when present, with a fallback for older entries.
     pub fn get_contract_count(env: Env, creator: Address) -> u32 {
         env.storage()
             .persistent()
             .get(&creator_contract_count_key(&creator))
-            .unwrap_or(0)
+            .unwrap_or_else(|| Self::get_contracts(env, creator).len())
     }
 
     /// Check whether a specific (creator, contract) pair is already registered.

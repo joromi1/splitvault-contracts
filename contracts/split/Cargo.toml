@@ -16,3 +16,7 @@ dashboard = { path = "../dashboard", features = ["testutils"] }
 
 [features]
 testutils = ["soroban-sdk/testutils"]
+
+[[test]]
+name = "e2e_lifecycle"
+path = "../../tests/e2e_lifecycle.rs"

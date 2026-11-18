@@ -16,11 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install pinned nightly Rust
-        uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2024-08-01
-          targets: wasm32v1-none
+          toolchain: 1.100.0
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -32,10 +30,69 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Run tests
-        run: cargo test --workspace
+        run: cargo test --locked --workspace
 
       - name: Storage key snapshot test
-        run: cargo test -p split storage_snapshot
+        run: cargo test --locked -p split storage_snapshot
+
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.100.0
+          targets: wasm32v1-none
+
+      - name: Install Stellar CLI
+        run: |
+          curl --fail --silent --show-error --location --retry 3 \
+            https://github.com/stellar/stellar-cli/releases/download/v30.0.1/stellar-cli-30.0.1-x86_64-unknown-linux-gnu.tar.gz \
+            | tar -xz -C "$RUNNER_TEMP" stellar
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+        shell: bash
+
+      - name: Build all production contracts
+        run: stellar contract build --locked
+
+      - name: Verify release artifacts
+        run: |
+          for contract in split dashboard invoice_escrow factory registry; do
+            test -s "target/wasm32v1-none/release/${contract}.wasm"
+          done
+
+  rustdoc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.100.0
+
+      - name: Run doctests
+        run: cargo test --locked --workspace --doc
+
+      - name: Build API documentation
+        env:
+          RUSTDOCFLAGS: "-D rustdoc::broken_intra_doc_links"
+        run: cargo doc --locked --workspace --lib --no-deps --document-private-items
+
+  markdown:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install lychee
+        run: |
+          curl --fail --silent --show-error --location --retry 3 \
+            https://github.com/lycheeverse/lychee/releases/download/lychee-v0.24.2/lychee-x86_64-unknown-linux-musl.tar.gz \
+            | tar -xz -C "$RUNNER_TEMP" --strip-components=1 lychee-x86_64-unknown-linux-musl/lychee
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+        shell: bash
+
+      - name: Check tracked Markdown links
+        run: git ls-files -z '*.md' | xargs -0 -r lychee --offline --include-fragments=anchor-only --
+        shell: bash
 
   fuzz:
     runs-on: ubuntu-latest
@@ -45,7 +102,7 @@ jobs:
       - name: Install pinned nightly Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2024-08-01
+          toolchain: nightly-2026-11-18
 
       - name: Cache cargo registry
         uses: actions/cache@v4
@@ -57,7 +114,7 @@ jobs:
           key: ${{ runner.os }}-cargo-fuzz-${{ hashFiles('fuzz/Cargo.toml') }}
 
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz
+        run: cargo install --locked cargo-fuzz --version 0.13.2
 
       - name: Fuzz create_invoice (60s)
         run: cargo fuzz run fuzz_create_invoice -- -max_total_time=60

@@ -85,7 +85,7 @@ pub enum StorageKey {
     PlatformFeeWaiverList,
     /// Addresses exempt from the creation fee.
     CreatorFeeWaiver,
-    /// Tiered fee schedule (Vec<FeeTier>).
+    /// Tiered fee schedule (`Vec<FeeTier>`).
     FeeTiers,
     /// Underlying protocol / network fee (issue #559 extension).
     ProtocolFee,
@@ -497,7 +497,7 @@ pub fn creator_fee_bps_key(invoice_id: u64) -> (Symbol, u64) {
 }
 
 /// Set of allowed payment tokens — persistent storage.
-/// Key: Symbol → Vec<Address>
+/// Key: Symbol → `Vec<Address>`
 pub fn allowed_tokens_key() -> Symbol {
     symbol_short!("alwd_toks")
 }

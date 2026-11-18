@@ -6,7 +6,7 @@ Thank you for your interest in contributing to SplitVault! This repo is part of 
 
 **Do not begin coding until you have been assigned to an issue by a maintainer.**
 
-1. Browse [open issues](../../issues) and find one labelled `good first issue` or matching your skill level.
+1. Browse [open issues](https://github.com/joromi1/splitvault-contracts/issues) and find one labelled `good first issue` or matching your skill level.
 2. Comment on the issue: "I'd like to work on this."
 3. Wait for a maintainer to assign you. Only then should you fork and start coding.
 
@@ -215,4 +215,4 @@ migration + tests.
 
 ## Questions?
 
-Open a [Discussion](../../discussions) or ask in the issue thread.
+Open a [Discussion](https://github.com/joromi1/splitvault-contracts/discussions) or ask in the issue thread.

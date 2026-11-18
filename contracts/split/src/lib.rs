@@ -77,7 +77,7 @@ mod storage_keys;
 
 mod migrations;
 
-use error::ContractError;
+pub use error::ContractError;
 use validation::assert_valid_bps;
 use calc::{calc_platform_fee, funding_bps};
 use soroban_sdk::crypto::bls12_381::{Fr, G1Affine};
@@ -250,11 +250,11 @@ fn get_payment_close_at_internal(env: &Env, id: u64) -> Option<u64> {
     env.storage().persistent().get(&payment_close_at_key(id))
 }
 
-/// Issue #332: contiguous Vec<Address> of all recipients — persistent storage.
+/// Issue #332: contiguous `Vec<Address>` of all recipients — persistent storage.
 fn recipients_list_key(id: u64) -> (Symbol, u64) {
     (symbol_short!("rec_lst"), id)
 }
-/// Issue #332: contiguous Vec<i128> of amounts parallel to recipients_list_key — persistent storage.
+/// Issue #332: contiguous `Vec<i128>` of amounts parallel to recipients_list_key — persistent storage.
 fn amounts_list_key(id: u64) -> (Symbol, u64) {
     (symbol_short!("amt_lst"), id)
 }
@@ -1186,7 +1186,7 @@ fn reentrancy_lock_key() -> Symbol {
 /// # Usage
 ///
 /// ```rust,ignore
-/// pub fn my_fn(env: Env, …) {
+/// pub fn my_fn(env: Env) {
 ///     let _guard = ReentrancyGuard::acquire(&env);
 ///     // … guarded work …
 /// }  // _guard dropped here, lock always cleared
@@ -1201,7 +1201,7 @@ impl ReentrancyGuard {
     fn acquire(env: &Env) -> Self {
         let key = reentrancy_lock_key();
         if env.storage().temporary().has(&key) {
-            panic!("{}", ContractError::ReentrantCall as u32);
+            panic_with_error!(env, ContractError::ReentrantCall);
         }
         env.storage().temporary().set(&key, &true);
         ReentrancyGuard { env: env.clone() }
@@ -3762,7 +3762,7 @@ impl SplitContract {
     }
 
     /// Add a co-creator to an invoice. Only the primary creator may call this.
-    /// The co-creator list is bounded to [`MAX_CO_CREATORS`].
+    /// The co-creator list is bounded to `MAX_CO_CREATORS`.
     pub fn add_co_creator(env: Env, caller: Address, invoice_id: u64, co_creator: Address) {
         require_not_paused(&env);
         caller.require_auth();
@@ -7107,6 +7107,8 @@ impl SplitContract {
                 &payer,
                 net_paid,
                 &funding_token_for(&invoice),
+                0,
+                invoice.funded,
             );
 
             let total: i128 = invoice.amounts.iter().sum();
@@ -7158,7 +7160,7 @@ impl SplitContract {
     /// ignored and no funds move yet. The contract only stores `commitment` —
     /// a digest of the payer's Pedersen commitment `C = value*G + blinding*H` —
     /// keyed by `(invoice_id, payer)`. The payer later calls
-    /// [`Self::reveal_confidential_payment`] with the opening `(value, blinding)`
+    /// [`SplitContract::reveal_confidential_payment`] with the opening `(value, blinding)`
     /// to settle: only then does the real amount move and become visible on-chain.
     pub fn pay(
         env: Env,
@@ -8613,14 +8615,7 @@ impl SplitContract {
         invoice_id: u64,
         preimage: Option<Bytes>,
     ) {
-        // --- Reentrancy guard (issue #451-reentrancy) ---
-        // Uses temporary storage so the lock is never persisted across transactions.
-        let re_key = reentrancy_lock_key();
-        if env.storage().temporary().has(&re_key) {
-            panic_with_error!(env, ContractError::ReentrantCall);
-        }
-        env.storage().temporary().set(&re_key, &true);
-        // ------------------------------------------------
+        let _guard = ReentrancyGuard::acquire(&env);
         Self::_release_invoice_inner(&env, caller, invoice_id, preimage);
     }
 
@@ -10750,7 +10745,7 @@ impl SplitContract {
 
     /// Full immediate release (no tranches).
     /// Issue #89: Returns stake to creator on successful release.
-    /// Issue #41: Swaps recipient payout via DEX if swap_tokens[i] is set.
+    /// Issue #41: Swaps recipient payout via DEX if `swap_tokens[i]` is set.
     fn _release_full(env: &Env, invoice_id: u64, invoice: &mut Invoice, actor: &Address) {
         // Issue #27: vesting cliff field not in current schema; proceed normally
 
