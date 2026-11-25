@@ -79,6 +79,9 @@ mod validation;
 mod test;
 
 #[cfg(test)]
+mod test_confirm_condition;
+
+#[cfg(test)]
 mod fuzz_tests;
 
 #[cfg(test)]
@@ -9967,6 +9970,13 @@ impl SplitContract {
             .as_ref()
             .expect("no oracle set for invoice");
         oracle.require_auth();
+        // Issue #277: a second confirmation by the authorized oracle is an
+        // explicit no-op. Returning before the write and the audit append
+        // keeps `oracle_ok` a single transition marker, so audit consumers
+        // can distinguish the actual condition-met transition from repeats.
+        if invoice.condition_met {
+            return;
+        }
         invoice.condition_met = true;
         save_invoice(&env, invoice_id, &invoice);
         append_audit_entry(&env, invoice_id, symbol_short!("oracle_ok"), oracle);
